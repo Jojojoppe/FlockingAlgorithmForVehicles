@@ -1,0 +1,87 @@
+layout(local_size_x = 1, local_size_y = 1) in;
+
+float delta(float t){
+    return step(0.0, -t)*step(0.0, t);
+}
+
+float u(float t){
+    return 1-step(0.0, -t);
+}
+
+void main(){
+    uint i = gl_GlobalInvocationID.x;
+    uint N = gl_NumWorkGroups.x;
+    uint j = gl_GlobalInvocationID.y;
+    uint M = gl_NumWorkGroups.y - N;
+
+    if(i==j){
+        bDistanceState[i*N+j].dist = 0;
+        bDistanceState[i*N+j].angle = 0;
+        return;
+    }
+
+    if(bSimState[i].steps<bSimState[i].start){
+        return;
+    }
+
+    float dist = 10*l;
+    float angle = 0.0;
+    vec2 iPos = bPosState[i].pos.xy;
+
+    // Check distance from i to j where i is a vehicle and j is a vehicle or a wall
+    if(j>=N){
+        // j is a wall
+
+        // Get two points of wall
+        vec2 A = bWallPos[(j-N)*2] * scale;
+        vec2 B = bWallPos[(j-N)*2+1] * scale;
+        float norm = bWallInfo[j-N].norm;
+
+        vec2 wA = A - iPos;
+        vec2 wB = B - iPos;
+        vec2 AB = B - A;
+        vec2 BA = A - B;
+
+        // Calculate alphaA and alphaB. MinMax is used to suppress NaN's
+        float alphaA = acos(max(min(dot(wA, BA)/(length(wA)*length(BA)), 1.0), -1.0));
+        float alphaB = acos(max(min(dot(wB, AB)/(length(wB)*length(AB)), 1.0), -1.0));
+
+        // Calculate distance towards A and B
+        float dAB = length(wA)*sin(alphaA)*u(PI_F/2-alphaA) + length(wA)*(u(alphaA-PI_F/2) + delta(alphaA - PI_F/2));
+        float dBA = length(wB)*sin(alphaB)*u(PI_F/2-alphaB) + length(wB)*(u(alphaB-PI_F/2) + delta(alphaB - PI_F/2));
+        // Combine everything
+        dist = dAB*(u(alphaA-PI_F/2)+delta(alphaA-PI_F/2)); 
+        dist += dBA*(u(alphaB-PI_F/2)+delta(alphaB-PI_F/2));
+        dist += min(dAB, dBA)*u(PI_F/2-alphaA)*u(PI_F/2-alphaB);
+
+        // Angle calculation
+        // AB, BA, ABBA
+        angle = (norm-alphaA+PI_F/2)*(u(alphaA-PI_F/2)+delta(alphaA-PI_F/2));
+        angle += (norm-alphaB+PI_F/2)*(u(alphaB-PI_F/2)+delta(alphaB-PI_F/2)); 
+        angle += (norm+PI_F/2)*u(PI_F/2-alphaA)*u(PI_F/2-alphaB);
+
+        angle = mod(angle, 2*PI_F);
+
+        if(dist<collisionDistance){
+            bSimState[i].collided = 1;
+        }
+
+    }else{
+        
+        // j is a vehicle
+        vec2 jPos = bPosState[j].pos.xy;
+        dist = length(iPos-jPos);
+        angle = acos(dot(vec2(cos(bPosState[i].rot+PI_F/2), sin(bPosState[i].rot+PI_F/2)), jPos-iPos)/length(jPos-iPos));
+        angle = mod(angle, PI_F);
+
+        if(dist<2*collisionDistance && bSimState[j].start<bSimState[j].steps){
+            bSimState[i].collided = 1;
+        }
+
+    }
+
+    bDistanceState[j*N+i].dist = dist;
+    bDistanceState[j*N+i].angle = angle;
+
+
+}

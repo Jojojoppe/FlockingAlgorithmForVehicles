@@ -1,0 +1,146 @@
+layout(local_size_x = 1) in;
+
+float u(float t){
+    return 1-step(0.0, -t);
+}
+
+void main(){
+    uint i = gl_GlobalInvocationID.x;           // Index of vehicle
+    uint N = gl_NumWorkGroups.x;                // Amount of vehicles
+    uint M = uint(uM);
+
+    if(bSimState[i].steps<bSimState[i].start){
+        return;
+    }
+
+    // vec4 dvel = bMovState[i].dvel;              // Desired velocity of vehicle in world space : OUTPUT
+    vec4 dvel = bMovState[i].vel;              // Desired velocity of vehicle in world space : OUTPUT
+    vec4 vel = bMovState[i].vel;
+    float theta = bPosState[i].rot;
+    
+
+    vec4 cohesion = vec4(0.0);
+    vec4 alignment = vec4(0.0);
+    vec4 seperation = vec4(0.0);
+    // dvel = vec4(0.0);
+    
+    uint cn = 0;
+    uint cs = 0;
+
+    float FOV = 0.6*PI_S;
+
+    // Loop over all vehicles 
+    for(int j = 0; j<N; j++){
+        if(i==j || bSimState[j].steps<bSimState[j].start) continue;
+
+        // Is vehicle in sight and within FOV? 
+        if(bDistanceState[i*N+j].dist <= ud_v){ // && bDistanceState[i*N+j].angle < FOV){
+
+            if(bSimState[j].collided==0){
+                cn++;
+        
+                cohesion += bPosState[j].pos - bPosState[i].pos;
+                alignment += (normalize(bMovState[j].vel) + normalize(bMovState[j].dvel))/2;
+            }
+    
+            if(bDistanceState[i*N+j].dist <= ud_s){
+                cs++;
+    
+                seperation -= normalize(bPosState[j].pos - bPosState[i].pos) * exp(ud_s - bDistanceState[i*N+j].dist);
+    
+            }
+        }
+    
+    }
+
+    if(cn>0){
+        cohesion /= cn;
+        alignment /= cn;
+    }    
+    
+    if(cs>0){
+        seperation /= cs;
+    }
+    
+    dvel += uw_coh * cohesion;
+    dvel += uw_ali * alignment;
+    dvel += uw_sep * seperation;
+
+    bInternalData[i].cohesion = cohesion;//uw_coh * cohesion;
+    bInternalData[i].alignment = alignment;//uw_ali * alignment;
+    bInternalData[i].seperation = seperation;//uw_sep * seperation;
+
+    if(length(dvel)>0){
+        dvel = normalize(dvel) * min(length(dvel), 2.0);
+    }
+
+    alignment = vec4(0.0);
+    seperation = vec4(0.0);
+    
+    cn = 0;
+    cs = 0;
+
+    // Loop over all objects
+    for(int j = 0; j<M; j++){
+        float d = bDistanceState[(N+j)*N+i].dist;
+        // float alpha = bDistanceState[(N+j)*N+i].angle;
+
+        float alpha = bWallInfo[j].norm;
+
+        // Angle is angle between (up pointing) origin and vehicle (norm in most cases)
+        // float a = alpha - theta - PI_S;            // Angle between norm and pointing direction of vehicle 
+        float a = alpha - theta;
+        // bInternalData[j].cohesion.x = a;
+        a = mod(a+4*PI_S, 2*PI_S);
+        // bInternalData[j].cohesion.y = a;
+
+        // Create a beta-agent
+        // Rotate normal in direction of velocity vehicle
+        float norm_rot = alpha+sign(a-PI_S)*PI_S/2;
+        if(a-PI_S==0){
+            continue;
+        }
+        // bInternalData[j].cohesion.z = norm_rot;
+        // bInternalData[j].cohesion.w = alpha;
+        // Caclculate velocity of agent (normalized)
+        // vec4 beta_vel = vec4(cos(alpha+norm_rot+PI_S/2), sin(alpha+norm_rot+PI_S/2), 0.0, 0.0);
+        vec4 beta_vel = vec4(cos(PI_S/2-norm_rot), sin(PI_S/2-norm_rot), 0.0, 0.0);
+        // Calculate position of agent
+        // Create seperation vector
+        // vec4 beta_sep = vec4(cos(alpha-PI_S/2), sin(alpha-PI_S/2), 0.0, 0.0) * d;
+        vec4 beta_sep = vec4(cos(PI_S/2-alpha), sin(PI_S/2-alpha), 0.0, 0.0) * d;
+        vec4 beta_pos = bPosState[i].pos + beta_sep;
+
+        if(d<=ud_v){
+            // Apply cohesion to beta-agent
+            cn++;
+
+            // Apply alignment to beta-agent
+            alignment += beta_vel;
+
+            // Apply seperation to beta-agent
+            if(d <= ud_v){
+                cs += 1;
+                seperation += normalize(beta_sep) * exp(ud_s - d);
+            }
+        }
+    }
+
+    if(cn>0){
+        alignment /= cn;
+    }    
+    
+    if(cs>0){
+        seperation /= cs;
+    }
+    
+    // dvel = vec4(0.0);
+    dvel += uw_ali * alignment;
+    dvel += uw_sep * seperation;
+
+    if(length(dvel)>0){
+        dvel = normalize(dvel) * min(length(dvel), 2.0);
+    }
+
+    bMovState[i].dvel = dvel;
+}

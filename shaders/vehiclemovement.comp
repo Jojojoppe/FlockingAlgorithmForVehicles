@@ -1,0 +1,94 @@
+layout(local_size_x = 1) in;
+
+float mod2pi(float x){
+    return 2*PI_F*((x-PI_F)/(2*PI_F) - floor(x/(2*PI_F)));
+}
+
+float u(float t){
+    return 1-step(0.0, -t);
+}
+
+void main(){
+    uint i = gl_GlobalInvocationID.x;
+    uint N = gl_NumWorkGroups.x;
+
+    if(bSimState[i].steps<bSimState[i].start){
+        // Increase step count
+        bSimState[i].steps += 1;
+        bSimState[i].time += uDeltaTime;
+        return;
+    }
+
+    vec4 position = bPosState[i].pos;
+    float theta = bPosState[i].rot;
+    float phi = bMovState[i].angle;
+    vec4 v_c = bMovState[i].vel;
+    vec4 v_d = bMovState[i].dvel;
+    float Nv_r = bMovState[i].speed;
+
+    // Calculate velocity from desired velocity
+    // Calculate phi_d
+    ////float phi_d = atan(v_d.y, v_d.x) - theta + PI_F/2;
+    float phi_d = PI_F/2 - atan(v_d.y, v_d.x) - theta;
+    // Calculate phi_c_max
+    float phi_c_max = atan(tan(phi_max)/2);
+    // Clamp phi_d to get phi_c
+    ////float phi_c = max(-phi_c_max, min(phi_c_max, mod2pi(phi_d)));
+    float phi_c = max(-phi_c_max, min(phi_c_max, phi_d));
+    // Clamp change in phi_c to dphi_max
+    // TODO CHECK ME and see if this can be calculated with less steps!!
+    // Calculate curret phi_c
+    float phi_c_c = atan(tan(phi)/2);
+    // Calculate dphi
+    float dphi = atan(2*tan(phi_c-phi_c_c));
+    // Clamp change
+    dphi = max(-dphi_max*uDeltaTime, min(dphi_max*uDeltaTime, dphi));
+    // Recalculate phi_c
+    phi_c = phi_c_c + atan(tan(dphi)/2);
+
+    // Calculate length of v_c by projecting v_d onto line with angle phi_c
+    // Clamp velocity to vmax
+    // TODO this is a simplification. Ideally Nv_r must be clamped
+    //float Nv_c = cos(phi_d-phi_c)*length(v_d); // See notes of 17-04
+    float Nv_c = min(vmax, length(v_d));
+    // Clamp new velocity with maximum acceleration
+    float dNv_c = Nv_c - length(v_c);
+    Nv_c = max(amaxneg*uDeltaTime, min(amaxpos*uDeltaTime, dNv_c)) + length(v_c);
+    // Create v_c
+    ////v_c = Nv_c * vec4(cos(phi_c+theta+PI_F/2), sin(phi_c+theta+PI_F/2), 0.0, 0.0);
+    v_c = Nv_c * vec4(cos(PI_F/2-theta-phi_c), sin(PI_F/2-theta-phi_c), 0.0, 0.0);
+
+    // Calculate steering angle from velocity
+    phi = atan(2*tan(phi_c));
+
+    // Calculate driving speed (on rear axis)
+    // Calculate rear axis radius
+    float R_R = l/tan(phi);
+    // Calculate center axis radius
+    float R_c = l/(2*sin(phi_c));
+    // Calculate omega
+    float omega_c = Nv_c/R_c;
+    // Calculate Nv_r;
+    Nv_r = R_R * omega_c;
+
+    // ----------------------------
+    //  Update position and rotation
+    
+    v_c = v_c           * (1-bSimState[i].collided)   * u(length(v_c));
+    omega_c = omega_c   * (1-bSimState[i].collided)   * u(length(v_c));
+
+    position += uDeltaTime * v_c;
+    theta += uDeltaTime * omega_c;
+
+    // ----------------------------
+
+    bPosState[i].pos    = position;
+    bPosState[i].rot    = theta;
+    bMovState[i].angle  = phi;
+    bMovState[i].vel    = v_c;
+    bMovState[i].speed  = Nv_r;
+
+    // Increase step count
+    bSimState[i].steps += 1-bSimState[i].collided;
+    bSimState[i].time += (1-bSimState[i].collided)*uDeltaTime;
+}
